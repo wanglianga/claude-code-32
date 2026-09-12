@@ -1,0 +1,57 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: ${COMPOSE_PROJECT_NAME}-db
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-vaxdb}
+      MYSQL_USER: ${DB_USER:-vax}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-vaxpass}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_ROOT_PASSWORD:-rootpass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    # 数据库不发布到宿主端口，仅在 compose 内网通过服务名 db 访问
+
+  app:
+    build:
+      context: ./backend
+    image: ${COMPOSE_PROJECT_NAME}-app:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-vaxdb}
+      DB_USER: ${DB_USER:-vax}
+      DB_PASSWORD: ${DB_PASSWORD:-vaxpass}
+      VAX_JWT_SECRET: ${VAX_JWT_SECRET:-community-vaccine-platform-demo-jwt-secret-key-please-change-in-prod-0123456789}
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    expose:
+      - "8080"
+
+  web:
+    build:
+      context: ./frontend
+    image: ${COMPOSE_PROJECT_NAME}-web:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-web
+    depends_on:
+      - app
+    ports:
+      - "${CC_PUBLISH_PORT}:8080"
+    restart: unless-stopped
+
+volumes:
+  db-data:
