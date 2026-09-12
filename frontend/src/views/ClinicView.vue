@@ -23,7 +23,7 @@
       <div class="tab" :class="{ active: tab === 'daily' }" @click="switchTab('daily')">今日门诊</div>
       <div class="tab" :class="{ active: tab === 'verify' }" @click="switchTab('verify')">到诊核验与接种</div>
       <div class="tab" :class="{ active: tab === 'review' }" @click="switchTab('review')" v-if="isDoctor">医生复核</div>
-      <div class="tab" :class="{ active: tab === 'migration' }" @click="switchTab('migration')">迁入记录核验</div>
+      <div class="tab" :class="{ active: tab === 'migration' }" @click="switchTab('migration')">接种本核验队列<span v-if="queue.length" class="badge danger" style="margin-left:6px">{{ queue.length }}</span></div>
       <div class="tab" :class="{ active: tab === 'consult' }" @click="switchTab('consult')">家长咨询</div>
       <div class="tab" :class="{ active: tab === 'lookup' }" @click="switchTab('lookup')">儿童档案查询</div>
     </div>
@@ -80,6 +80,11 @@
             </div>
             <div v-if="checklist.appointment.plan && checklist.appointment.plan.vaccineCode !== checklist.appointment.vaccineCode"
                  class="badge warn mt8">同组换苗接种：计划 {{ checklist.appointment.plan.vaccineName }} → 实际 {{ checklist.appointment.vaccineName }}</div>
+            <div v-if="checklist.appointment.plan?.adjustReason" class="mt8"
+                 style="background:var(--primary-light);border-radius:8px;padding:10px">
+              <b>📌 本剂安排说明（护士接诊须知）</b>
+              <div class="small mt8">{{ checklist.appointment.plan.adjustReason }}</div>
+            </div>
           </div>
 
           <div class="card" v-if="!record">
@@ -178,25 +183,44 @@
       </div>
     </div>
 
-    <!-- 迁入核验 -->
+    <!-- 迁入接种本人工核验队列 -->
     <div v-if="tab === 'migration'">
-      <div class="card" v-for="c in children" :key="c.id">
-        <h3>{{ c.name }} <span class="muted small">迁入 {{ c.moveInDate || '-' }}</span></h3>
-        <table>
-          <thead><tr><th>疫苗</th><th>剂次</th><th>接种日期</th><th>批号</th><th>原单位</th><th>凭证</th><th>操作</th></tr></thead>
-          <tbody>
-            <tr v-for="p in unverifiedPriors(c.id)" :key="p.id">
-              <td>{{ p.vaccineName }}</td><td>第{{ p.doseNo }}剂</td><td>{{ p.vaccinationDate }}</td>
-              <td class="small">{{ p.batchNo }}</td><td class="small">{{ p.clinicName }}</td>
-              <td><span class="badge" :class="p.verified ? 'ok' : 'warn'">{{ p.verified ? '已核验' : '待核验' }}</span></td>
-              <td class="row">
-                <button class="btn-sm" @click="verifyPrior(p, true)">核验通过</button>
-                <button class="btn-sm btn-danger" @click="verifyPrior(p, false)">不予采信</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="!unverifiedPriors(c.id).length" class="muted small">无待核验迁入记录。</p>
+      <div class="card row" style="justify-content:space-between">
+        <h3 style="margin:0">外地接种本人工核验队列（防重复接种 / 防漏种）</h3>
+        <button class="btn-ghost btn-sm" @click="loadQueue">刷新队列</button>
+      </div>
+      <div v-if="!queue.length" class="card muted small">队列为空，没有待核验或模糊的迁入记录。</div>
+      <div class="card" v-for="row in queue" :key="row.prior.id">
+        <div class="row" style="justify-content:space-between; align-items:flex-start">
+          <div>
+            <b>{{ row.childName }}</b>
+            <span class="muted small">（生于 {{ row.birthDate }}）</span>
+            <span class="badge" :class="priorSt(row.prior.verifyStatus).cls" style="margin-left:8px">
+              {{ priorSt(row.prior.verifyStatus).text }}
+            </span>
+            <span v-if="row.prior.migrationDocId" class="small" style="margin-left:8px">
+              <a href="#" @click.prevent="viewDoc(row.prior.migrationDocId)">🔍 查看接种本原件</a>
+            </span>
+          </div>
+          <div class="muted small">置信度 {{ row.prior.confidence != null ? Math.round(row.prior.confidence * 100) + '%' : '-' }}</div>
+        </div>
+        <div class="grid grid-3 mt8">
+          <label class="field"><span>疫苗（模糊时请按原件纠正）</span>
+            <select v-model="editMap[row.prior.id].vaccineCode">
+              <option value="">未识别—请选择</option>
+              <option v-for="v in vaccines" :key="v.code" :value="v.code">{{ v.name }}</option>
+            </select></label>
+          <label class="field"><span>剂次</span><input type="number" v-model.number="editMap[row.prior.id].doseNo" /></label>
+          <label class="field"><span>接种日期</span><input type="date" v-model="editMap[row.prior.id].vaccinationDate" /></label>
+          <label class="field"><span>批号</span><input v-model="editMap[row.prior.id].batchNo" placeholder="原件不清可留空" /></label>
+          <label class="field"><span>原接种单位</span><input v-model="editMap[row.prior.id].clinicName" /></label>
+          <label class="field"><span>核验备注</span><input v-model="editMap[row.prior.id].note" placeholder="与原件核对一致 / 印章不清…" /></label>
+        </div>
+        <div class="small muted" v-if="row.prior.vaccineName">识别原文：{{ row.prior.vaccineName }} 第{{ row.prior.doseNo }}剂 {{ row.prior.vaccinationDate }} 批号 {{ row.prior.batchNo || '模糊' }}</div>
+        <div class="row mt8">
+          <button @click="confirmPrior(row.prior)">✓ 确认采信（跳过该剂并重算补种计划）</button>
+          <button class="btn-danger" @click="rejectPrior(row.prior)">不予采信（该剂转为追加补种）</button>
+        </div>
       </div>
     </div>
 
@@ -250,7 +274,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { api, APPT_STATUS, getUser } from '../api'
+import { api, APPT_STATUS, PRIOR_STATUS, getUser, previewFile } from '../api'
 
 const isDoctor = getUser()?.role === 'DOCTOR'
 const tab = ref('daily')
@@ -258,7 +282,9 @@ const toast = ref(''); const toastErr = ref(false)
 const dailyDate = ref(new Date().toISOString().slice(0, 10))
 const daily = ref([])
 const children = ref([])
-const priorsCache = ref({})
+const vaccines = ref([])
+const queue = ref([])
+const editMap = reactive({})
 const reviewPlans = ref([])
 const consultations = ref([])
 const openConsults = computed(() => consultations.value.filter(c => c.status === 'OPEN'))
@@ -282,6 +308,7 @@ const form = reactive({
 const obs = reactive({ onSiteReaction: '无异常', guardianConfirmed: false, abnormal: false, abnormalSymptoms: '' })
 
 function ast(s) { return APPT_STATUS[s] || { text: s, cls: 'muted' } }
+function priorSt(s) { return PRIOR_STATUS[s] || { text: s, cls: 'muted' } }
 function recBadge(s) {
   return { COMPLETED: { text: '完成留观', cls: 'ok' }, ABNORMAL: { text: '现场异常', cls: 'danger' },
     WITHHELD: { text: '暂缓未种', cls: 'warn' }, OBSERVING: { text: '留观中', cls: 'warn' } }[s] || { text: s, cls: 'muted' }
@@ -309,21 +336,45 @@ async function loadReview() {
   reviewPlans.value = all
 }
 async function loadConsults() { consultations.value = await api.get('/api/consultations/open') }
-function unverifiedPriors(cid) {
-  const rec = priorsCache.value[cid]
-  return rec ? (rec.priors || []).filter(p => p.source === 'MIGRATED' && !p.verified) : []
+async function loadQueue() {
+  queue.value = await api.get('/api/migration/queue')
+  for (const row of queue.value) {
+    const p = row.prior
+    if (!editMap[p.id]) {
+      editMap[p.id] = {
+        vaccineCode: p.vaccineCode || '', doseNo: p.doseNo,
+        vaccinationDate: p.vaccinationDate, batchNo: p.batchNo || '',
+        clinicName: p.clinicName || '', note: ''
+      }
+    }
+  }
+}
+async function viewDoc(docId) {
+  try {
+    const url = await previewFile('/api/migration-docs/' + docId + '/file')
+    window.open(url, '_blank')
+  } catch (e) { showToast(e.message, true) }
+}
+async function confirmPrior(p) {
+  const e = editMap[p.id]
+  if (!e.vaccineCode) return showToast('记录未能识别疫苗，请先在下拉中纠正为正确疫苗', true)
+  await api.post('/api/migration/priors/' + p.id + '/confirm', { ...e })
+  showToast('已核验采信：该剂跳过，补种计划已重算并重新开放后续预约时段')
+  await loadQueue(); await loadReview()
+}
+async function rejectPrior(p) {
+  const note = prompt('不予采信原因（将通知家长补证或补种）', '接种本印章不清，无法核实')
+  if (note === null) return
+  await api.post('/api/migration/priors/' + p.id + '/reject', { note })
+  showToast('已驳回：该剂转为追加补种，计划已重算')
+  await loadQueue(); await loadReview()
 }
 
 async function switchTab(k) {
   tab.value = k
   if (k === 'review') loadReview()
   if (k === 'consult') loadConsults()
-  if (k === 'migration') {
-    for (const c of children.value) {
-      const r = await api.get('/api/children/' + c.id + '/health-record')
-      priorsCache.value[c.id] = r
-    }
-  }
+  if (k === 'migration') loadQueue()
 }
 async function checkIn(a) {
   await api.post('/api/appointments/' + a.id + '/check-in')
@@ -389,12 +440,6 @@ async function submitReview() {
   showToast('复核意见已记录')
   await loadChecklist()
 }
-async function verifyPrior(p, ok) {
-  await api.post('/api/children/priors/' + p.id + '/verify', { verified: ok })
-  showToast(ok ? '已采信，计划已重算' : '未采信，计划已重算')
-  for (const c of children.value) priorsCache.value[c.id] = null
-  await switchTab('migration')
-}
 function onReplyInput(id, e) { replyMap[id] = { reply: e.target.value } }
 async function reply(c) {
   const replyText = replyMap[c.id]?.reply
@@ -411,6 +456,7 @@ async function loadLookup() {
 
 onMounted(async () => {
   batches.value = await api.get('/api/catalog/batches')
+  vaccines.value = await api.get('/api/catalog/vaccines')
   await loadChildren()
   await loadDaily()
   loadConsults()

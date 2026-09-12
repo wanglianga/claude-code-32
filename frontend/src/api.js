@@ -36,7 +36,21 @@ async function request(method, url, body) {
 export const api = {
   get: (url) => request('GET', url),
   post: (url, body) => request('POST', url, body || {}),
-  put: (url, body) => request('PUT', url, body || {})
+  put: (url, body) => request('PUT', url, body || {}),
+  upload: async (url, formData) => {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: getToken() ? 'Bearer ' + getToken() : '' },
+      body: formData
+    })
+    const json = await resp.json()
+    if (!resp.ok || json.code !== 0) {
+      if (resp.status === 401) { clearSession(); location.hash = '#/login' }
+      throw new Error(json.message || '上传失败')
+    }
+    return json.data
+  },
+  fileUrl: (url) => url + '?token=' // 占位，实际用带 token 的 fetch 预览
 }
 
 export const PLAN_STATUS = {
@@ -45,9 +59,17 @@ export const PLAN_STATUS = {
   DONE: { text: '已完成', cls: 'done' },
   WAIT_INTERVAL: { text: '间隔未满', cls: 'muted' },
   WAIT_STOCK: { text: '等待库存', cls: 'danger' },
+  WAIT_VERIFY: { text: '迁入待核验', cls: 'warn' },
   CONTRA: { text: '禁忌暂缓', cls: 'danger' },
   REVIEW: { text: '待医生复核', cls: 'warn' },
   EXPIRED: { text: '超龄不补种', cls: 'muted' }
+}
+
+export const PRIOR_STATUS = {
+  UNVERIFIED: { text: '待核验', cls: 'warn' },
+  AMBIGUOUS: { text: '模糊·人工队列', cls: 'danger' },
+  CONFIRMED: { text: '已核验', cls: 'ok' },
+  REJECTED: { text: '不予采信', cls: 'muted' }
 }
 
 export const APPT_STATUS = {
@@ -77,3 +99,11 @@ export function fmtDate(d) {
   return String(d).substring(0, 10)
 }
 export function fmtDateTime(d) { return d || '-' }
+
+/** 带 token 拉取二进制文件并在新窗口打开预览 */
+export async function previewFile(url) {
+  const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + getToken() } })
+  if (!resp.ok) throw new Error('文件读取失败')
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
+}

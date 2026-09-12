@@ -38,7 +38,8 @@
               <td>{{ fmtDate(p.dueDate) }}</td>
               <td>{{ fmtDate(p.earliestDate) }}</td>
               <td>{{ fmtDate(p.ageLimitDate) }}</td>
-              <td class="small muted" style="max-width:300px">{{ p.remark }}</td>
+              <td class="small muted" style="max-width:300px">{{ p.remark }}
+                <div v-if="p.adjustReason" class="mt8" style="color:var(--primary)">📌 {{ p.adjustReason }}</div></td>
               <td>
                 <button v-if="p.status === 'DUE' || p.status === 'OVERDUE'" class="btn-sm" @click="openBooking(p)">预约</button>
                 <span v-else-if="p.status === 'DONE'" class="small muted">{{ fmtDate(p.completedDate) }} 已完成</span>
@@ -113,6 +114,27 @@
             <button @click="addPrior">登记待核验</button>
           </div>
           <p class="muted small">迁入记录需护士/医生核验接种证后才计入程序。</p>
+
+          <h3 class="mt16">上传外地接种本（自动识别疫苗/剂次/日期/批号）</h3>
+          <div class="row">
+            <input type="file" ref="fileInput" accept="image/*,.txt" style="max-width:300px" />
+            <button @click="uploadDoc">上传并识别</button>
+            <button class="btn-ghost btn-sm" @click="downloadTemplate">下载文本接种本模板</button>
+          </div>
+          <p class="muted small">支持拍照图片（演示环境模拟 OCR，含一条故意模糊记录演示人工队列）或 .txt 文本本（每行：疫苗代码,剂次,日期,批号,单位,置信度）。</p>
+          <table class="mt8" v-if="migrationRecords.length">
+            <thead><tr><th>疫苗</th><th>剂次</th><th>接种日期</th><th>批号</th><th>原单位</th><th>置信度</th><th>核验状态</th><th>医生备注</th></tr></thead>
+            <tbody>
+              <tr v-for="p in migrationRecords" :key="p.id">
+                <td>{{ p.vaccineName }}<div class="muted small">{{ p.vaccineCode || '未识别' }}</div></td>
+                <td>第{{ p.doseNo }}剂</td><td>{{ p.vaccinationDate }}</td>
+                <td class="small">{{ p.batchNo || '模糊' }}</td><td class="small">{{ p.clinicName }}</td>
+                <td>{{ p.confidence != null ? Math.round(p.confidence * 100) + '%' : '-' }}</td>
+                <td><span class="badge" :class="priorSt(p.verifyStatus).cls">{{ priorSt(p.verifyStatus).text }}</span></td>
+                <td class="small muted">{{ p.reviewNote }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -214,7 +236,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { api, PLAN_STATUS, APPT_STATUS, fmtDate } from '../api'
+import { api, PLAN_STATUS, APPT_STATUS, PRIOR_STATUS, fmtDate } from '../api'
 
 const tabs = [
   { k: 'plan', label: '接种/补种计划' },
@@ -239,6 +261,8 @@ const createForm = reactive({ name: '', gender: 'M', birthDate: '', moveInDate: 
 const healthText = ref('')
 const newAllergy = reactive({ allergen: '', reaction: '' })
 const newPrior = reactive({ vaccineCode: '', doseNo: 1, vaccinationDate: '', clinicName: '' })
+const migrationRecords = ref([])
+const fileInput = ref(null)
 const ask = reactive({ topic: '', question: '' })
 const booking = ref(null)
 const slots = ref([])
@@ -246,6 +270,7 @@ const bookingVaccine = ref('')
 
 function st(s) { return PLAN_STATUS[s] || { text: s, cls: 'muted' } }
 function ast(s) { return APPT_STATUS[s] || { text: s, cls: 'muted' } }
+function priorSt(s) { return PRIOR_STATUS[s] || { text: s, cls: 'muted' } }
 function showToast(msg, err) { toast.value = msg; toastErr.value = !!err; setTimeout(() => toast.value = '', 3500) }
 function vaccineName(code) { return vaccines.value.find(v => v.code === code)?.name || code }
 const altVaccines = ref([])
@@ -258,11 +283,10 @@ async function loadChildren() {
 async function onChildChange() {
   child.value = children.value.find(c => c.id === childId.value)
   healthText.value = child.value?.healthStatus || ''
-  await loadPlans()
-  await loadRecord()
-  await loadConsultations()
+  await Promise.all([loadPlans(), loadRecord(), loadConsultations(), loadMigration()])
 }
 async function loadPlans() { plans.value = await api.get('/api/plans/child/' + childId.value) }
+async function loadMigration() { migrationRecords.value = await api.get('/api/children/' + childId.value + '/migration-records') }
 async function loadAppts() { appointments.value = await api.get('/api/appointments/mine') }
 async function loadRecord() { record.value = await api.get('/api/children/' + childId.value + '/health-record') }
 async function loadConsultations() { consultations.value = await api.get('/api/children/' + childId.value + '/consultations') }
@@ -297,8 +321,26 @@ async function addPrior() {
   if (!newPrior.vaccineCode || !newPrior.vaccinationDate) return showToast('请选择疫苗与接种日期', true)
   await api.post('/api/children/' + childId.value + '/priors', { ...newPrior })
   newPrior.vaccineCode = ''; newPrior.clinicName = ''
-  await Promise.all([loadRecord(), loadPlans()])
+  await Promise.all([loadRecord(), loadPlans(), loadMigration()])
   showToast('迁入记录已登记，等待门诊核验')
+}
+async function uploadDoc() {
+  const f = fileInput.value?.files?.[0]
+  if (!f) return showToast('请先选择接种本照片或文本文件', true)
+  const fd = new FormData(); fd.append('file', f)
+  try {
+    const res = await api.upload('/api/children/' + childId.value + '/migration-docs', fd)
+    const ambiguous = res.records.filter(r => r.verifyStatus === 'AMBIGUOUS').length
+    showToast(`识别出 ${res.records.length} 条记录` + (ambiguous ? `，其中 ${ambiguous} 条模糊已进入人工队列` : '，等待医生核验'))
+    fileInput.value.value = ''
+    await Promise.all([loadMigration(), loadPlans(), loadRecord()])
+  } catch (e) { showToast(e.message, true) }
+}
+function downloadTemplate() {
+  const content = '# 每行：疫苗代码,剂次,接种日期,批号,原接种单位,置信度(0-1)\nHEPB,1,2025-10-20,HEPB-OLD-01,外地县医院,0.98\nBCG,1,2025-10-21,BCG-OLD-01,外地县医院,0.61\n'
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob); a.download = '接种本模板.txt'; a.click()
 }
 async function askConsult() {
   if (!ask.topic || !ask.question) return

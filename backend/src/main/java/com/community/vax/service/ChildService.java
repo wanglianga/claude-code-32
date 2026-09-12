@@ -144,7 +144,7 @@ public class ChildService {
         p.setClinicName(req.clinicName());
         p.setNote(req.note());
         p.setSource("MIGRATED");
-        p.setVerified(false);
+        p.setVerifyStatus("UNVERIFIED");
         p = priorRepo.save(p);
         notifier.notifyStaff("MIGRATION", "WARN",
                 "迁入接种记录待核验：" + child.getName(),
@@ -171,6 +171,12 @@ public class ChildService {
         return planService.regenerate(childId);
     }
 
+    /** 供控制器做归属权限校验 */
+    @Transactional(readOnly = true)
+    public Child requireAccessible(Long childId, SysUser user) {
+        return getFor(user, childId);
+    }
+
     /**
      * 儿童维度健康档案：基础信息 + 过敏/禁忌 + 时间线
      * （计划、接种、异常反应、咨询、迁入记录统一按时间排列，可解释补种延后/换苗/复核原因）
@@ -189,15 +195,21 @@ public class ChildService {
                     "detail", nullToDash(p.getRemark())));
         }
         for (PriorVaccination p : priorRepo.findByChildIdOrderByVaccinationDateAsc(childId)) {
+            String state;
+            if ("LOCAL".equals(p.getSource())) state = "本门诊接种";
+            else state = switch (p.getVerifyStatus()) {
+                case "CONFIRMED" -> "材料已核验";
+                case "AMBIGUOUS" -> "模糊待人工核验";
+                case "REJECTED" -> "不予采信";
+                default -> "材料待核验";
+            };
             timeline.add(Map.of(
                     "date", String.valueOf(p.getVaccinationDate()),
                     "type", "PRIOR", "typeName", "MIGRATED".equals(p.getSource()) ? "迁入接种" : "既往接种",
                     "title", p.getVaccineName() + " 第" + p.getDoseNo() + "剂",
-                    "status", Boolean.TRUE.equals(p.getVerified()) ? "VERIFIED" : "UNVERIFIED",
+                    "status", "LOCAL".equals(p.getSource()) ? "VERIFIED" : p.getVerifyStatus(),
                     "detail", "批号 " + nullToDash(p.getBatchNo()) + "；" + nullToDash(p.getClinicName())
-                            + ("MIGRATED".equals(p.getSource())
-                                ? (Boolean.TRUE.equals(p.getVerified()) ? "（材料已核验）" : "（材料待核验）")
-                                : "（本门诊接种）")));
+                            + ("MIGRATED".equals(p.getSource()) ? "（" + state + "）" : "")));
         }
         for (VaccinationRecord r : recordRepo.findByChildIdOrderByVaccinationDateDesc(childId)) {
             timeline.add(Map.of(

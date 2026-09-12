@@ -64,6 +64,10 @@ public class VaccinationPlan {
     @Column(length = 255)
     private String doctorApprovedNote;
 
+    /** 护士/医生接诊可见的剂次调整说明：为何跳过、追加、延后或换苗 */
+    @Column(length = 500)
+    private String adjustReason;
+
     private LocalDateTime updatedAt = LocalDateTime.now();
 
     public Long getId() { return id; }
@@ -98,6 +102,8 @@ public class VaccinationPlan {
     public void setDoctorApproved(Boolean v) { this.doctorApproved = v; }
     public String getDoctorApprovedNote() { return doctorApprovedNote; }
     public void setDoctorApprovedNote(String v) { this.doctorApprovedNote = v; }
+    public String getAdjustReason() { return adjustReason; }
+    public void setAdjustReason(String adjustReason) { this.adjustReason = adjustReason; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }

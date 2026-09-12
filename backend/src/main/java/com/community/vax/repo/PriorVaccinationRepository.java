@@ -7,4 +7,7 @@ import java.util.List;
 
 public interface PriorVaccinationRepository extends JpaRepository<PriorVaccination, Long> {
     List<PriorVaccination> findByChildIdOrderByVaccinationDateAsc(Long childId);
+    List<PriorVaccination> findByVerifyStatus(String verifyStatus);
+    List<PriorVaccination> findByChildIdAndVerifyStatusInOrderByVaccinationDateAsc(Long childId, List<String> statuses);
+    long countByVerifyStatus(String verifyStatus);
 }

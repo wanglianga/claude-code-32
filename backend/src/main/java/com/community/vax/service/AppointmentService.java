@@ -89,7 +89,9 @@ public class AppointmentService {
             String healthBlock = healthBlockReason(child);
             if (healthBlock != null) reasons.add(healthBlock);
             if (PlanService.BOOKABLE.contains(plan.getStatus()) == false) {
-                reasons.add("计划当前状态为 " + plan.getStatus() + "，不可直接预约");
+                reasons.add("WAIT_VERIFY".equals(plan.getStatus())
+                        ? "迁入接种记录待人工核验，核验前不可预约，避免重复接种"
+                        : "计划当前状态为 " + plan.getStatus() + "，不可直接预约");
             }
 
             VaccineBatch b = batches.isEmpty() ? null : batches.get(0);

@@ -8,6 +8,10 @@ server:
 spring:
   application:
     name: vaccine-platform
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
   datasource:
     url: jdbc:mysql://${DB_HOST:db}:${DB_PORT:3306}/${DB_NAME:vaxdb}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8&useUnicode=true
     username: ${DB_USER:vax}

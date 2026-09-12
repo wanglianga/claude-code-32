@@ -38,6 +38,7 @@ tmp/
 temp/
 
 # Claude Code and QA artifacts
+CLAUDE.md
 memory/
 memory/**
 skill/
