@@ -63,7 +63,7 @@
         </select>
       </div>
 
-      <div v-if="checklist && verifyAppt">
+      <div v-if="checklist && verifyApptId">
         <div class="grid grid-2">
           <div class="card">
             <h3>儿童与健康信息</h3>
@@ -82,7 +82,7 @@
                  class="badge warn mt8">同组换苗接种：计划 {{ checklist.appointment.plan.vaccineName }} → 实际 {{ checklist.appointment.vaccineName }}</div>
           </div>
 
-          <div class="card" v-if="!record || record.status === 'OBSERVING'">
+          <div class="card" v-if="!record">
             <h3>护士五项核验</h3>
             <label class="row"><input type="checkbox" v-model="form.identityVerified" style="width:auto"/> ① 儿童身份核验（姓名/出生日期/证件）</label>
             <label class="row mt8"><input type="checkbox" v-model="form.batchVerified" style="width:auto"/> ② 疫苗批号与外观核验</label>
