@@ -216,7 +216,13 @@
           <label class="field"><span>原接种单位</span><input v-model="editMap[row.prior.id].clinicName" /></label>
           <label class="field"><span>核验备注</span><input v-model="editMap[row.prior.id].note" placeholder="与原件核对一致 / 印章不清…" /></label>
         </div>
-        <div class="small muted" v-if="row.prior.vaccineName">识别原文：{{ row.prior.vaccineName }} 第{{ row.prior.doseNo }}剂 {{ row.prior.vaccinationDate }} 批号 {{ row.prior.batchNo || '模糊' }}</div>
+        <div class="small muted">
+          识别原文：{{ row.prior.vaccineName }}
+          第{{ row.prior.doseNo || '?' }}剂<span v-if="!row.prior.doseNo">（原件：{{ row.prior.rawDoseText || '不清' }}）</span>
+          {{ row.prior.vaccinationDate || '日期模糊' }}<span v-if="!row.prior.vaccinationDate">（原件：{{ row.prior.rawDateText || '不清' }}）</span>
+          批号 {{ row.prior.batchNo || '模糊' }}
+        </div>
+        <div v-if="row.prior.verifyStatus === 'REJECTED'" class="small" style="color:var(--danger)">驳回原因：{{ row.prior.reviewNote }}</div>
         <div class="row mt8">
           <button @click="confirmPrior(row.prior)">✓ 确认采信（跳过该剂并重算补种计划）</button>
           <button class="btn-danger" @click="rejectPrior(row.prior)">不予采信（该剂转为追加补种）</button>
@@ -337,17 +343,19 @@ async function loadReview() {
 }
 async function loadConsults() { consultations.value = await api.get('/api/consultations/open') }
 async function loadQueue() {
-  queue.value = await api.get('/api/migration/queue')
-  for (const row of queue.value) {
+  const rows = await api.get('/api/migration/queue')
+  // 先准备好每行的编辑模型，再上屏，避免中间帧 v-model 取到 undefined
+  for (const row of rows) {
     const p = row.prior
     if (!editMap[p.id]) {
       editMap[p.id] = {
-        vaccineCode: p.vaccineCode || '', doseNo: p.doseNo,
-        vaccinationDate: p.vaccinationDate, batchNo: p.batchNo || '',
+        vaccineCode: p.vaccineCode || '', doseNo: p.doseNo ?? '',
+        vaccinationDate: p.vaccinationDate || '', batchNo: p.batchNo || '',
         clinicName: p.clinicName || '', note: ''
       }
     }
   }
+  queue.value = rows
 }
 async function viewDoc(docId) {
   try {

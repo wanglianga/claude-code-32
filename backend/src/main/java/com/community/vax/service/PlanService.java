@@ -133,6 +133,15 @@ public class PlanService {
             int extra = n - groupTemplateCount.getOrDefault(g, 0);
             if (extra > 0) groupExtra.put(g, extra);
         });
+        // 被驳回的迁入记录（按组），其原因要随补种剂次展示给护士
+        Map<String, List<PriorVaccination>> groupRejected = new HashMap<>();
+        for (PriorVaccination p : allPriors) {
+            if ("REJECTED".equals(p.getVerifyStatus())
+                    && p.getVaccineCode() != null && vMap.containsKey(p.getVaccineCode())) {
+                groupRejected.computeIfAbsent(vMap.get(p.getVaccineCode()).getVaccineGroup(),
+                        k -> new ArrayList<>()).add(p);
+            }
+        }
 
         List<Contraindication> contras = contraRepo.findByChildIdAndActiveTrue(childId);
         List<Allergy> allergies = allergyRepo.findByChildId(childId);
@@ -240,7 +249,13 @@ public class PlanService {
                     adjust.add("因缺货延后，到货后自动追加开放预约");
                 } else {
                     status = today.isAfter(due) ? "OVERDUE" : "DUE";
-                    if (status.equals("OVERDUE")) {
+                    List<PriorVaccination> rej = groupRejected.getOrDefault(line.group(), List.of());
+                    if (!rej.isEmpty()) {
+                        PriorVaccination r = rej.get(0);
+                        remarks.add("外地接种本相关记录不予采信（" + nullToDash(r.getReviewNote()) + "），需在本门诊补种");
+                        adjust.add("原外地记录第" + (r.getDoseNo() == null ? "?(原件:" + nullToDash(r.getRawDoseText()) + ")" : r.getDoseNo())
+                                + "剂被驳回（原因：" + nullToDash(r.getReviewNote()) + "），该剂须在本门诊补种");
+                    } else if (status.equals("OVERDUE")) {
                         remarks.add("已漏种，应种日期 " + due + "，请尽快补种");
                         // 迁入儿童前序剂次经核验计入时，说明本剂为何追加
                         boolean hasConfirmedMigration = allPriors.stream()

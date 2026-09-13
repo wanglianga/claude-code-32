@@ -26,11 +26,17 @@ public class PriorVaccination {
     @Column(nullable = false, length = 64)
     private String vaccineName;
 
-    @Column(nullable = false)
+    @Column(nullable = true)
     private Integer doseNo;
 
-    @Column(nullable = false)
     private LocalDate vaccinationDate;
+
+    /** OCR 无法可靠识别时的原始片段（如“第?剂”“2026-?−15”），供人工核验对照 */
+    @Column(length = 64)
+    private String rawDoseText;
+
+    @Column(length = 32)
+    private String rawDateText;
 
     @Column(length = 64)
     private String batchNo;
@@ -87,6 +93,10 @@ public class PriorVaccination {
     public void setDoseNo(Integer doseNo) { this.doseNo = doseNo; }
     public LocalDate getVaccinationDate() { return vaccinationDate; }
     public void setVaccinationDate(LocalDate vaccinationDate) { this.vaccinationDate = vaccinationDate; }
+    public String getRawDoseText() { return rawDoseText; }
+    public void setRawDoseText(String rawDoseText) { this.rawDoseText = rawDoseText; }
+    public String getRawDateText() { return rawDateText; }
+    public void setRawDateText(String rawDateText) { this.rawDateText = rawDateText; }
     public String getBatchNo() { return batchNo; }
     public void setBatchNo(String batchNo) { this.batchNo = batchNo; }
     public String getClinicName() { return clinicName; }

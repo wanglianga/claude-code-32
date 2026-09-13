@@ -127,7 +127,8 @@
             <tbody>
               <tr v-for="p in migrationRecords" :key="p.id">
                 <td>{{ p.vaccineName }}<div class="muted small">{{ p.vaccineCode || '未识别' }}</div></td>
-                <td>第{{ p.doseNo }}剂</td><td>{{ p.vaccinationDate }}</td>
+                <td>第{{ p.doseNo || '?' }}剂<span v-if="!p.doseNo" class="muted small">（{{ p.rawDoseText || '原件不清' }}）</span></td>
+                <td>{{ p.vaccinationDate || '日期模糊' }}<span v-if="!p.vaccinationDate" class="muted small">（{{ p.rawDateText }}）</span></td>
                 <td class="small">{{ p.batchNo || '模糊' }}</td><td class="small">{{ p.clinicName }}</td>
                 <td>{{ p.confidence != null ? Math.round(p.confidence * 100) + '%' : '-' }}</td>
                 <td><span class="badge" :class="priorSt(p.verifyStatus).cls">{{ priorSt(p.verifyStatus).text }}</span></td>

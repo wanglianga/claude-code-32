@@ -42,8 +42,9 @@ public class MigrationService {
         this.notifier = notifier;
     }
 
-    public record ParsedRow(String rawVaccine, Integer doseNo, LocalDate date, String batchNo,
-                            String clinicName, Double confidence) {}
+    public record ParsedRow(String rawVaccine, Integer doseNo, String rawDoseText,
+                            LocalDate date, String rawDateText,
+                            String batchNo, String clinicName, Double confidence) {}
 
     /** 上传接种本并识别（演示环境：文本接种本按行解析；图片做模拟 OCR） */
     @Transactional
@@ -74,8 +75,10 @@ public class MigrationService {
             String code = matched != null ? matched.getCode() : null;
             String name = matched != null ? matched.getName() : row.rawVaccine();
             double conf = row.confidence() == null ? 0.5 : row.confidence();
+            // 疫苗/剂次/日期/批号任一无法可靠识别 → 模糊人工队列
             boolean ambiguous = matched == null || conf < AMBIGUOUS_THRESHOLD
-                    || row.doseNo() == null || row.batchNo() == null || row.batchNo().isBlank()
+                    || row.doseNo() == null || row.date() == null
+                    || row.batchNo() == null || row.batchNo().isBlank()
                     || "?".equals(row.batchNo());
 
             // 与既有同疫苗同剂次同日期记录去重，避免重复上传产生重复待核验行
@@ -92,15 +95,20 @@ public class MigrationService {
             p.setChild(child);
             p.setVaccineCode(code);
             p.setVaccineName(name == null || name.isBlank() ? "未能识别的疫苗" : name);
-            p.setDoseNo(row.doseNo() == null ? 1 : row.doseNo());
-            p.setVaccinationDate(row.date() == null ? LocalDate.now() : row.date());
+            // 剂次/日期识别不出时保留为空并记录原件原文，不臆造默认值
+            p.setDoseNo(row.doseNo());
+            p.setRawDoseText(row.rawDoseText());
+            p.setVaccinationDate(row.date());
+            p.setRawDateText(row.rawDateText());
             p.setBatchNo(("?".equals(row.batchNo()) || row.batchNo() == null) ? null : row.batchNo());
             p.setClinicName(row.clinicName());
             p.setSource("MIGRATED");
             p.setVerifyStatus(ambiguous ? "AMBIGUOUS" : "UNVERIFIED");
             p.setConfidence(Math.round(conf * 100) / 100.0);
-            ocr.append("· ").append(p.getVaccineName()).append(" 第").append(p.getDoseNo()).append("剂 ")
-                    .append(p.getVaccinationDate()).append(" 批号 ").append(p.getBatchNo() == null ? "模糊" : p.getBatchNo())
+            ocr.append("· ").append(p.getVaccineName())
+                    .append(" 第").append(p.getDoseNo() == null ? "?（原件：" + nullDash(p.getRawDoseText()) + "）" : p.getDoseNo()).append("剂 ")
+                    .append(p.getVaccinationDate() == null ? "日期模糊（原件：" + nullDash(p.getRawDateText()) + "）" : p.getVaccinationDate())
+                    .append(" 批号 ").append(p.getBatchNo() == null ? "模糊" : p.getBatchNo())
                     .append(" 置信度 ").append(p.getConfidence())
                     .append(ambiguous ? "（模糊，需人工）\n" : "（待医生确认）\n");
             saved.add(p);
@@ -149,25 +157,50 @@ public class MigrationService {
                 if (line.isBlank() || line.startsWith("#")) continue;
                 String[] c = line.split(",");
                 if (c.length < 3) continue;
+                String doseRaw = c[1].trim();
+                String dateRaw = c[2].trim();
+                Integer dose = parseIntOrNull(doseRaw);
+                LocalDate date = parseDateOrNull(dateRaw);
                 rows.add(new ParsedRow(
                         c[0].trim(),
-                        Integer.parseInt(c[1].trim()),
-                        LocalDate.parse(c[2].trim()),
+                        dose, dose == null ? doseRaw : null,
+                        date, date == null ? dateRaw : null,
                         c.length > 3 ? c[3].trim() : null,
                         c.length > 4 ? c[4].trim() : "外地接种单位",
-                        c.length > 5 ? Double.parseDouble(c[5].trim()) : 0.95));
+                        c.length > 5 ? parseDoubleOrNull(c[5].trim()) : 0.95));
             }
-            if (rows.isEmpty()) throw new BizException("未识别到有效接种记录，每行格式：疫苗代码,剂次,日期,批号,单位,置信度");
+            if (rows.isEmpty()) throw new BizException("未识别到有效接种记录，每行格式：疫苗代码,剂次,日期,批号,单位,置信度（剂次/日期无法辨认可填 ?）");
             return rows;
         }
-        // 模拟图片 OCR（演示数据，确定性输出）：出生当天乙肝、次日卡介苗清晰；另一条印章遮挡的模糊记录
+        // 模拟图片 OCR（演示数据，确定性输出）：出生当天乙肝清晰；卡介苗日期模糊；另一条剂次被印章遮挡
         LocalDate b = child.getBirthDate();
         return List.of(
-                new ParsedRow("HEPB", 1, b, "HEPB-OCR-" + (child.getId() * 7 % 90 + 10), "外地县医院", 0.98),
-                new ParsedRow("BCG", 1, b.plusDays(1), "BCG-OCR-" + (child.getId() * 5 % 90 + 10), "外地县医院", 0.61),
-                new ParsedRow("未知疫苗", 1, b.plusMonths(2), "?", "外地接种门诊", 0.33)
+                new ParsedRow("HEPB", 1, null, b, null,
+                        "HEPB-OCR-" + (child.getId() * 7 % 90 + 10), "外地县医院", 0.98),
+                new ParsedRow("BCG", 1, null, null, "2025-??-21",
+                        "BCG-OCR-" + (child.getId() * 5 % 90 + 10), "外地县医院", 0.61),
+                new ParsedRow("DTP", null, "第?剂（印章遮挡）", b.plusMonths(4), null,
+                        "?", "外地接种门诊", 0.33)
         );
     }
+
+    private Integer parseIntOrNull(String s) {
+        if (s == null) return null;
+        String t = s.replaceAll("[^0-9]", "");
+        if (t.isBlank()) return null;
+        try { return Integer.parseInt(t); } catch (Exception e) { return null; }
+    }
+
+    private LocalDate parseDateOrNull(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return LocalDate.parse(s.trim()); } catch (Exception e) { return null; }
+    }
+
+    private Double parseDoubleOrNull(String s) {
+        try { return Double.parseDouble(s); } catch (Exception e) { return 0.5; }
+    }
+
+    private String nullDash(String s) { return s == null || s.isBlank() ? "-" : s; }
 
     /** 人工提醒队列：全部待核验/模糊记录 */
     @Transactional(readOnly = true)
@@ -207,6 +240,16 @@ public class MigrationService {
         if (req.vaccinationDate() != null && !req.vaccinationDate().isBlank()) {
             p.setVaccinationDate(LocalDate.parse(req.vaccinationDate()));
         }
+        if (p.getDoseNo() == null) {
+            throw new BizException("剂次无法可靠识别（原件：" + nullDash(p.getRawDoseText())
+                    + "），请人工确认后填写正确剂次再采信");
+        }
+        if (p.getVaccinationDate() == null) {
+            throw new BizException("接种日期无法可靠识别（原件：" + nullDash(p.getRawDateText())
+                    + "），请人工核对后填写正确日期再采信");
+        }
+        p.setRawDoseText(null);
+        p.setRawDateText(null);
         if (req.batchNo() != null) p.setBatchNo(req.batchNo().isBlank() ? null : req.batchNo());
         if (req.clinicName() != null && !req.clinicName().isBlank()) p.setClinicName(req.clinicName());
         p.setVerifyStatus("CONFIRMED");
@@ -248,13 +291,21 @@ public class MigrationService {
         planService.regenerate(p.getChild().getId());
 
         Long uid = p.getChild().getGuardian() == null ? null : p.getChild().getGuardian().getUserId();
+        String doseText = p.getDoseNo() == null
+                ? "?(原件:" + (p.getRawDoseText() == null ? "-" : p.getRawDoseText()) + ")"
+                : String.valueOf(p.getDoseNo());
         if (uid != null) {
             notifier.notifyUser(uid, "MIGRATION", "WARN",
                     "迁入接种记录待补证：" + p.getChild().getName(),
-                    p.getVaccineName() + " 第" + p.getDoseNo() + "剂因“" + p.getReviewNote()
-                            + "”暂未采信，系统已将该剂加入补种计划，请携带原件到门诊复核或在线预约补种。",
+                    p.getVaccineName() + " 第" + doseText + "剂因“" + p.getReviewNote()
+                            + "”暂未采信，系统已将相关剂次加入补种计划，请携带原件到门诊复核或在线预约补种。",
                     p.getChild(), "PRIOR", p.getId());
         }
+        // 驳回后同组剂次转补种，原因要随计划展示给护士
+        notifier.notifyStaff("MIGRATION", "INFO",
+                "迁入记录驳回：" + p.getChild().getName() + " " + p.getVaccineName(),
+                "第" + doseText + "剂未采信（" + p.getReviewNote() + "），相关补种剂次的接诊说明已带上驳回原因。",
+                p.getChild(), "PRIOR", p.getId());
         return p;
     }
 
