@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 接种/补种计划生成核心。
@@ -133,7 +134,7 @@ public class PlanService {
             int extra = n - groupTemplateCount.getOrDefault(g, 0);
             if (extra > 0) groupExtra.put(g, extra);
         });
-        // 被驳回的迁入记录（按组），其原因要随补种剂次展示给护士
+        // 被驳回的迁入记录（按组归集），解析计划行时再按疫苗+剂次精确绑定，避免污染其他剂次
         Map<String, List<PriorVaccination>> groupRejected = new HashMap<>();
         for (PriorVaccination p : allPriors) {
             if ("REJECTED".equals(p.getVerifyStatus())
@@ -249,12 +250,18 @@ public class PlanService {
                     adjust.add("因缺货延后，到货后自动追加开放预约");
                 } else {
                     status = today.isAfter(due) ? "OVERDUE" : "DUE";
-                    List<PriorVaccination> rej = groupRejected.getOrDefault(line.group(), List.of());
-                    if (!rej.isEmpty()) {
-                        PriorVaccination r = rej.get(0);
-                        remarks.add("外地接种本相关记录不予采信（" + nullToDash(r.getReviewNote()) + "），需在本门诊补种");
-                        adjust.add("原外地记录第" + (r.getDoseNo() == null ? "?(原件:" + nullToDash(r.getRawDoseText()) + ")" : r.getDoseNo())
-                                + "剂被驳回（原因：" + nullToDash(r.getReviewNote()) + "），该剂须在本门诊补种");
+                    // 驳回原因精确绑定：同疫苗、同剂次（剂次不明的驳回不绑定任何计划行）
+                    List<PriorVaccination> rejHere = groupRejected.getOrDefault(line.group(), List.of()).stream()
+                            .filter(r -> Objects.equals(r.getDoseNo(), t.getDoseNo())
+                                    && v.getCode().equals(r.getVaccineCode()))
+                            .toList();
+                    if (!rejHere.isEmpty()) {
+                        String reasons = rejHere.stream()
+                                .map(r -> nullToDash(r.getReviewNote()))
+                                .distinct().collect(Collectors.joining("；"));
+                        remarks.add("第" + t.getDoseNo() + "剂外地记录不予采信（" + reasons + "），需在本门诊补种");
+                        adjust.add("原外地记录第" + t.getDoseNo() + "剂被驳回（原因：" + reasons
+                                + "），该剂须在本门诊补种");
                     } else if (status.equals("OVERDUE")) {
                         remarks.add("已漏种，应种日期 " + due + "，请尽快补种");
                         // 迁入儿童前序剂次经核验计入时，说明本剂为何追加

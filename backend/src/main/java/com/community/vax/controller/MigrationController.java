@@ -80,13 +80,19 @@ public class MigrationController {
         return ApiResult.ok(migrationService.confirm(priorId, r, web.currentUser()));
     }
 
-    public record RejectRequest(String note) {}
+    public record RejectRequest(String note, String vaccineCode, Integer doseNo,
+                                String vaccinationDate, String batchNo, String clinicName) {}
 
     @PostMapping("/migration/priors/{priorId}/reject")
     @Roles({Role.DOCTOR, Role.NURSE, Role.ADMIN})
     public ApiResult<PriorVaccination> reject(@PathVariable Long priorId,
                                               @RequestBody(required = false) RejectRequest req) {
-        return ApiResult.ok(migrationService.reject(priorId,
-                req == null ? null : req.note(), web.currentUser()));
+        if (req == null) {
+            return ApiResult.ok(migrationService.reject(priorId, null, null, web.currentUser()));
+        }
+        MigrationService.ConfirmRequest correction = new MigrationService.ConfirmRequest(
+                req.vaccineCode(), req.doseNo(), req.vaccinationDate(),
+                req.batchNo(), req.clinicName(), null);
+        return ApiResult.ok(migrationService.reject(priorId, correction, req.note(), web.currentUser()));
     }
 }

@@ -371,10 +371,11 @@ async function confirmPrior(p) {
   await loadQueue(); await loadReview()
 }
 async function rejectPrior(p) {
-  const note = prompt('不予采信原因（将通知家长补证或补种）', '接种本印章不清，无法核实')
+  const note = prompt('不予采信原因（将通知家长补证或补种；如原件模糊，请先在上方纠正疫苗/剂次/日期）', '接种本印章不清，无法核实')
   if (note === null) return
-  await api.post('/api/migration/priors/' + p.id + '/reject', { note })
-  showToast('已驳回：该剂转为追加补种，计划已重算')
+  const e = editMap[p.id] || {}
+  await api.post('/api/migration/priors/' + p.id + '/reject', { ...e, note })
+  showToast('已驳回' + (e.doseNo ? '：该剂转为追加补种且原因已绑定到具体剂次' : '：剂次不明，未绑定具体补种剂（请补证后处理）'))
   await loadQueue(); await loadReview()
 }
 

@@ -279,10 +279,26 @@ public class MigrationService {
         return p;
     }
 
-    /** 驳回：记录不予采信，相应剂次转为追加补种 */
+    /**
+     * 驳回：记录不予采信，相应剂次转为追加补种。
+     * 允许同时纠正疫苗/剂次/日期（模糊记录驳回前由人工补全），以便驳回原因精确绑定到补种剂次；
+     * 若剂次仍不明确，则不自动绑定任何计划行（避免污染其他剂次）。
+     */
     @Transactional
-    public PriorVaccination reject(Long priorId, String note, SysUser reviewer) {
+    public PriorVaccination reject(Long priorId, ConfirmRequest correction, String note, SysUser reviewer) {
         PriorVaccination p = priorRepo.findById(priorId).orElseThrow(() -> new BizException("记录不存在"));
+        if (correction != null) {
+            if (correction.vaccineCode() != null && !correction.vaccineCode().isBlank()) {
+                Vaccine v = vaccineRepo.findByCode(correction.vaccineCode().trim())
+                        .orElseThrow(() -> new BizException("疫苗代码不存在：" + correction.vaccineCode()));
+                p.setVaccineCode(v.getCode());
+                p.setVaccineName(v.getName());
+            }
+            if (correction.doseNo() != null) p.setDoseNo(correction.doseNo());
+            if (correction.vaccinationDate() != null && !correction.vaccinationDate().isBlank()) {
+                p.setVaccinationDate(LocalDate.parse(correction.vaccinationDate()));
+            }
+        }
         p.setVerifyStatus("REJECTED");
         p.setReviewedByName(reviewer.getName());
         p.setReviewedAt(LocalDateTime.now());

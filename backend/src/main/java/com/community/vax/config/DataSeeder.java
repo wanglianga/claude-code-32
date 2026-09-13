@@ -5,6 +5,7 @@ import com.community.vax.entity.*;
 import com.community.vax.repo.*;
 import com.community.vax.service.PlanService;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,8 +15,10 @@ import java.util.List;
 
 /**
  * 演示数据初始化（幂等：已存在 admin 账号则跳过）。
+ * 结构迁移见 {@link SchemaMigration}，以更高优先级先执行。
  */
 @Component
+@Order(100)
 public class DataSeeder implements CommandLineRunner {
 
     private final SysUserRepository userRepo;
