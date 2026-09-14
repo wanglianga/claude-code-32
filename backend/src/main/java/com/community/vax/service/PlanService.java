@@ -134,13 +134,53 @@ public class PlanService {
             int extra = n - groupTemplateCount.getOrDefault(g, 0);
             if (extra > 0) groupExtra.put(g, extra);
         });
-        // 被驳回的迁入记录（按组归集），解析计划行时再按疫苗+剂次精确绑定，避免污染其他剂次
+        // 被驳回的迁入记录（按组归集），解析计划行时再按“疫苗组 + 组内剂序”精确绑定，
+        // 支持跨苗同组序贯（如驳回 IPV 第2剂 → 落到 POLIO 组 OPV 第2剂），避免污染其他剂次
         Map<String, List<PriorVaccination>> groupRejected = new HashMap<>();
         for (PriorVaccination p : allPriors) {
             if ("REJECTED".equals(p.getVerifyStatus())
-                    && p.getVaccineCode() != null && vMap.containsKey(p.getVaccineCode())) {
+                    && p.getVaccineCode() != null && p.getVaccinationDate() != null
+                    && vMap.containsKey(p.getVaccineCode())) {
                 groupRejected.computeIfAbsent(vMap.get(p.getVaccineCode()).getVaccineGroup(),
                         k -> new ArrayList<>()).add(p);
+            }
+        }
+        // 计算每条驳回记录在组内的序贯位置（0 基）：把“已确认 + 已驳回”记录统一按
+        // （接种日期、迁入剂号、疫苗代码）排序后的排名，与程序模板 indexInGroup 对齐。
+        // 因此跨苗同组也正确：IPV 第1剂采信、IPV 第2剂驳回 → 驳回落在 POLIO 组第 2 序贯位（OPV2）；
+        // 同一剂位重复登记的多条驳回排名相同，原因合并到同一计划行，不顺延污染下一剂。
+        Map<Long, Integer> rejectedIndex = new HashMap<>();
+        for (String g : groupRejected.keySet()) {
+            final String group = g;
+            List<PriorVaccination> history = allPriors.stream()
+                    .filter(p -> p.getVaccineCode() != null && vMap.containsKey(p.getVaccineCode())
+                            && vMap.get(p.getVaccineCode()).getVaccineGroup().equals(group)
+                            && p.getVaccinationDate() != null
+                            && ("LOCAL".equals(p.getSource()) || "CONFIRMED".equals(p.getVerifyStatus())
+                                || "REJECTED".equals(p.getVerifyStatus())))
+                    .sorted(Comparator.comparing(PriorVaccination::getVaccinationDate)
+                            .thenComparing(p -> p.getDoseNo() == null ? 99 : p.getDoseNo())
+                            .thenComparing(PriorVaccination::getVaccineCode)
+                            .thenComparing(PriorVaccination::getId))
+                    .toList();
+            // 仅按已确认计数分配序贯位：第 N 条（N 从1）已确认之后的驳回，落在第 N 序贯位(0基 N-1)；
+            // 同一序贯位的多条驳回位置相同 → 合并
+            int confirmedSeen = 0;
+            Map<Long, Integer> posById = new HashMap<>();
+            for (PriorVaccination p : history) {
+                boolean confirmed = "LOCAL".equals(p.getSource()) || "CONFIRMED".equals(p.getVerifyStatus());
+                if (confirmed) {
+                    posById.put(p.getId(), confirmedSeen);
+                    confirmedSeen++;
+                } else { // REJECTED：占据“下一个待补种序贯位”
+                    posById.put(p.getId(), confirmedSeen);
+                }
+            }
+            // 若同一序贯位有多条（如重复驳回），它们自然映射到同一计划行；
+            // 驳回之后若还有更晚的已确认，已确认顺延由 computeLines 负责，这里只绑定驳回位置
+            for (PriorVaccination r : groupRejected.get(group)) {
+                rejectedIndex.put(r.getId(), posById.getOrDefault(r.getId(),
+                        Math.max(0, confirmedSeen - 1)));
             }
         }
 
@@ -250,18 +290,25 @@ public class PlanService {
                     adjust.add("因缺货延后，到货后自动追加开放预约");
                 } else {
                     status = today.isAfter(due) ? "OVERDUE" : "DUE";
-                    // 驳回原因精确绑定：同疫苗、同剂次（剂次不明的驳回不绑定任何计划行）
+                    // 驳回原因精确绑定：同疫苗组、且驳回记录的组内序贯位置等于当前计划行
+                    // （跨苗同组：驳回 IPV 第2剂 → POLIO 组 OPV 第2剂承接原因；剂次不明的不绑定）
                     List<PriorVaccination> rejHere = groupRejected.getOrDefault(line.group(), List.of()).stream()
-                            .filter(r -> Objects.equals(r.getDoseNo(), t.getDoseNo())
-                                    && v.getCode().equals(r.getVaccineCode()))
+                            .filter(r -> Objects.equals(rejectedIndex.get(r.getId()), line.indexInGroup()))
                             .toList();
                     if (!rejHere.isEmpty()) {
                         String reasons = rejHere.stream()
                                 .map(r -> nullToDash(r.getReviewNote()))
                                 .distinct().collect(Collectors.joining("；"));
-                        remarks.add("第" + t.getDoseNo() + "剂外地记录不予采信（" + reasons + "），需在本门诊补种");
-                        adjust.add("原外地记录第" + t.getDoseNo() + "剂被驳回（原因：" + reasons
-                                + "），该剂须在本门诊补种");
+                        String rejectedName = rejHere.stream()
+                                .map(r -> r.getVaccineCode() + " " + r.getVaccineName())
+                                .distinct().collect(Collectors.joining("/"));
+                        boolean crossVaccine = rejHere.stream()
+                                .anyMatch(r -> !v.getCode().equals(r.getVaccineCode()));
+                        remarks.add("第" + (line.indexInGroup() + 1) + "剂外地记录（" + rejectedName
+                                + "）不予采信（" + reasons + "），需在本门诊补种");
+                        adjust.add("原外地记录第" + (line.indexInGroup() + 1) + "剂（" + rejectedName + "）被驳回"
+                                + (crossVaccine ? "，同组序贯改由 " + v.getCode() + " " + v.getName() + " 承接补种" : "")
+                                + "（原因：" + reasons + "），该剂须在本门诊补种");
                     } else if (status.equals("OVERDUE")) {
                         remarks.add("已漏种，应种日期 " + due + "，请尽快补种");
                         // 迁入儿童前序剂次经核验计入时，说明本剂为何追加
